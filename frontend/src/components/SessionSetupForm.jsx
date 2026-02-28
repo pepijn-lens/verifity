@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { MODEL_OPTIONS, useSessionStore } from "../store/sessionStore";
-import { extractAttachmentContext } from "../utils/attachments";
+import { extractAttachmentContext, uploadFilesToStorage } from "../utils/attachments";
 import RoleTemplatesModal from "./RoleTemplatesModal";
 
 export default function SessionSetupForm({ onStart }) {
@@ -26,20 +26,29 @@ export default function SessionSetupForm({ onStart }) {
     });
   };
 
+  const [uploading, setUploading] = useState(false);
+
   const handleStart = async (event) => {
     event.preventDefault();
     if (!sessionGoal.trim() || selectedModelObjects.length === 0) return;
 
-    const attachmentContext = await extractAttachmentContext(files);
+    setUploading(true);
+    try {
+      const attachmentContext = await extractAttachmentContext(files);
+      const uploaded = await uploadFilesToStorage(files);
 
-    const payload = {
-      sessionGoal: `${sessionGoal.trim()}${attachmentContext.contextText}`,
-      maxAgents,
-      preferredModels: selectedModelObjects,
-      attachmentNames: attachmentContext.attachmentNames,
-    };
-    setSetupConfig(payload);
-    onStart(payload);
+      const payload = {
+        sessionGoal: `${sessionGoal.trim()}${attachmentContext.contextText}`,
+        maxAgents,
+        preferredModels: selectedModelObjects,
+        attachmentNames: attachmentContext.attachmentNames,
+        attachments: uploaded,
+      };
+      setSetupConfig(payload);
+      onStart(payload);
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -114,9 +123,10 @@ export default function SessionSetupForm({ onStart }) {
           <div className="flex items-center gap-3">
             <button
               type="submit"
-              className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400"
+              disabled={uploading}
+              className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-60"
             >
-              Start Session
+              {uploading ? "Uploading files..." : "Start Session"}
             </button>
             <button
               type="button"

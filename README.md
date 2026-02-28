@@ -1,6 +1,6 @@
-# ChatHub
+# Verifity
 
-ChatHub is a mission-control style multi-agent AI collaboration app. A master agent orchestrates specialized LLM agents, streams their debate in real time, and finishes with a synthesis card.
+Verifity is a mission-control style multi-agent AI collaboration app. A master agent orchestrates specialized LLM agents, streams their debate in real time, and finishes with a synthesis card.
 
 ## Stack
 
@@ -22,6 +22,6 @@ Services:
 
 ## API key handling
 
-- The OpenRouter key is stored only in browser localStorage as `chathub_openrouter_key`.
+- The OpenRouter key is stored only in browser localStorage as `Verifity_openrouter_key`.
 - Frontend sends the key on each session request through `X-OpenRouter-Key`.
 - Backend never persists the key.

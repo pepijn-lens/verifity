@@ -1,5 +1,26 @@
 import { create } from "zustand";
 
+function mergeTokenTotals(existing, incoming) {
+  if (!incoming) return existing;
+  const merged = {
+    totalPromptTokens: (existing.totalPromptTokens ?? 0) + (incoming.totalPromptTokens ?? 0),
+    totalCompletionTokens: (existing.totalCompletionTokens ?? 0) + (incoming.totalCompletionTokens ?? 0),
+    totalTokens: (existing.totalTokens ?? 0) + (incoming.totalTokens ?? 0),
+    totalCostUsd: (existing.totalCostUsd ?? 0) + (incoming.totalCostUsd ?? 0),
+    modelBreakdown: { ...(existing.modelBreakdown ?? {}) },
+  };
+  for (const [model, data] of Object.entries(incoming.modelBreakdown ?? {})) {
+    const prev = merged.modelBreakdown[model] ?? { tokens: 0, promptTokens: 0, completionTokens: 0, estimatedCostUsd: 0 };
+    merged.modelBreakdown[model] = {
+      tokens: prev.tokens + (data.tokens ?? 0),
+      promptTokens: prev.promptTokens + (data.promptTokens ?? 0),
+      completionTokens: prev.completionTokens + (data.completionTokens ?? 0),
+      estimatedCostUsd: prev.estimatedCostUsd + (data.estimatedCostUsd ?? 0),
+    };
+  }
+  return merged;
+}
+
 export const MODEL_OPTIONS = [
   { label: "GPT-5.2", value: "openai/gpt-5.2" },
   { label: "Claude 3.5 Sonnet", value: "anthropic/claude-3.5-sonnet" },
@@ -43,7 +64,7 @@ export const ROLE_TEMPLATES = [
 ];
 
 const DEMO_KEY = "demo_key_placeholder_rate_limited";
-const OPENROUTER_KEY_STORAGE = "chathub_openrouter_key";
+const OPENROUTER_KEY_STORAGE = "Verifity_openrouter_key";
 
 const mockAgents = [
   {
@@ -72,6 +93,7 @@ const mockAgents = [
 const existingKey = typeof window !== "undefined" ? localStorage.getItem(OPENROUTER_KEY_STORAGE) : null;
 
 export const useSessionStore = create((set, get) => ({
+  page: "home",
   apiKey: existingKey ?? "",
   usingDemoKey: false,
   onboardingOpen: !existingKey,
@@ -89,7 +111,9 @@ export const useSessionStore = create((set, get) => ({
   masterStatus: "Ready",
   eventLog: [],
   lastSessionConfig: null,
+  currentSessionId: null,
   selectedAgentId: null,
+  viewingPastSession: false,
   agents: mockAgents.map((agent) => ({
     ...agent,
     status: "idle",
@@ -173,6 +197,8 @@ export const useSessionStore = create((set, get) => ({
       setupComplete: true,
       synthesis: null,
       error: "",
+      page: "session",
+      viewingPastSession: false,
       tokenTotals: {
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
@@ -182,6 +208,8 @@ export const useSessionStore = create((set, get) => ({
       },
     }),
 
+  setCurrentSessionId: (id) => set({ currentSessionId: id }),
+
   startSession: () =>
     set({
       isRunning: true,
@@ -190,6 +218,8 @@ export const useSessionStore = create((set, get) => ({
       masterStatus: "Thinking...",
       synthesis: null,
       agents: [],
+      currentSessionId: null,
+      viewingPastSession: false,
     }),
 
   setSessionError: (message) =>
@@ -298,7 +328,7 @@ export const useSessionStore = create((set, get) => ({
           messages: nextMessages,
         };
       }),
-      tokenTotals: totals ?? get().tokenTotals,
+      tokenTotals: mergeTokenTotals(get().tokenTotals, totals),
     }),
 
   setSynthesis: (synthesis, totals) =>
@@ -308,4 +338,61 @@ export const useSessionStore = create((set, get) => ({
       isRunning: false,
       masterStatus: "Synthesis Ready",
     }),
+
+  navigate: (page) => set({ page }),
+
+  goHome: () =>
+    set({
+      page: "home",
+      setupComplete: false,
+      synthesis: null,
+      error: "",
+      roundNumber: 0,
+      masterStatus: "Ready",
+      eventLog: [],
+      currentSessionId: null,
+      viewingPastSession: false,
+      agents: mockAgents.map((agent) => ({
+        ...agent,
+        status: "idle",
+        error: "",
+        tokenCount: 0,
+        messages: [
+          { id: `${agent.id}_m1`, content: "Mock message preview. Start a session to run real agent debate." },
+        ],
+      })),
+      speakingOrder: mockAgents.map((agent) => agent.id),
+      tokenTotals: { totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0, totalCostUsd: 0, modelBreakdown: {} },
+    }),
+
+  loadPastSession: ({ session, messages }) => {
+    const agents = (session.agents ?? []).map((agent) => ({
+      ...agent,
+      status: "idle",
+      error: "",
+      tokenCount: 0,
+      messages: (messages ?? [])
+        .filter((m) => m.agentId === agent.id)
+        .map((m) => ({ id: m.id, role: m.role ?? "assistant", content: m.content })),
+    }));
+
+    set({
+      page: "session",
+      setupComplete: true,
+      viewingPastSession: true,
+      isRunning: false,
+      error: "",
+      synthesis: session.synthesis ?? null,
+      sessionGoal: session.sessionGoal ?? "",
+      roundNumber: session.rounds ?? 0,
+      masterStatus: session.status === "completed" ? "Synthesis Ready" : session.status ?? "Ready",
+      currentSessionId: session.id ?? null,
+      agents,
+      speakingOrder: session.speakingOrder ?? agents.map((a) => a.id),
+      tokenTotals: session.tokenTotals ?? {
+        totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0, totalCostUsd: 0, modelBreakdown: {},
+      },
+      eventLog: [],
+    });
+  },
 }));

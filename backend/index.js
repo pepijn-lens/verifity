@@ -370,5 +370,5 @@ Keep your response under 250 words.`;
 });
 
 app.listen(PORT, () => {
-  console.log(`ChatHub backend listening on http://localhost:${PORT}`);
+  console.log(`Verifity backend listening on http://localhost:${PORT}`);
 });

@@ -3,8 +3,8 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const defaultHeaders = (apiKey) => ({
   Authorization: `Bearer ${apiKey}`,
   "Content-Type": "application/json",
-  "HTTP-Referer": "https://localhost/chathub",
-  "X-Title": "ChatHub",
+  "HTTP-Referer": "https://localhost/Verifity",
+  "X-Title": "Verifity",
 });
 
 export async function createChatCompletion({

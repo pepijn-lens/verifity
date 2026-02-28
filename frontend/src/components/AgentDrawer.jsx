@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSessionStore } from "../store/sessionStore";
-import { extractAttachmentContext } from "../utils/attachments";
+import { extractAttachmentContext, uploadFilesToStorage } from "../utils/attachments";
 import MarkdownMessage from "./MarkdownMessage";
 
 export default function AgentDrawer({ onSendMessage, isSending }) {
@@ -50,41 +50,47 @@ export default function AgentDrawer({ onSendMessage, isSending }) {
         ))}
       </div>
 
-      <form
-        className="mt-3 flex gap-2"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!draft.trim()) return;
-          const attachmentContext = await extractAttachmentContext(files);
-          const promptWithFiles = `${draft.trim()}${attachmentContext.contextText}`;
-          onSendMessage?.(agent, promptWithFiles);
-          setDraft("");
-          setFiles([]);
-        }}
-      >
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={`Message ${agent.name}...`}
-          className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
-        />
-        <button
-          type="submit"
-          disabled={isSending}
-          className="rounded-lg bg-indigo-500 px-3 py-2 text-sm text-white hover:bg-indigo-400 disabled:opacity-60"
-        >
-          Send
-        </button>
-      </form>
-      <input
-        type="file"
-        multiple
-        accept="image/*,.pdf,.txt,.md,.csv,.json"
-        onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-        className="mt-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-300"
-      />
-      {files.length > 0 ? <div className="mt-1 text-xs text-zinc-500">{files.map((f) => f.name).join(", ")}</div> : null}
-      <div className="mt-1 text-xs text-zinc-500">Direct chat with this teammate after synthesis.</div>
+      {onSendMessage ? (
+        <>
+          <form
+            className="mt-3 flex gap-2"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (!draft.trim()) return;
+              const sessionId = useSessionStore.getState().currentSessionId;
+              const attachmentContext = await extractAttachmentContext(files);
+              await uploadFilesToStorage(files, sessionId);
+              const promptWithFiles = `${draft.trim()}${attachmentContext.contextText}`;
+              onSendMessage(agent, promptWithFiles);
+              setDraft("");
+              setFiles([]);
+            }}
+          >
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={`Message ${agent.name}...`}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            />
+            <button
+              type="submit"
+              disabled={isSending}
+              className="rounded-lg bg-indigo-500 px-3 py-2 text-sm text-white hover:bg-indigo-400 disabled:opacity-60"
+            >
+              Send
+            </button>
+          </form>
+          <input
+            type="file"
+            multiple
+            accept="image/*,.pdf,.txt,.md,.csv,.json"
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+            className="mt-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-300"
+          />
+          {files.length > 0 ? <div className="mt-1 text-xs text-zinc-500">{files.map((f) => f.name).join(", ")}</div> : null}
+          <div className="mt-1 text-xs text-zinc-500">Direct chat with this teammate after synthesis.</div>
+        </>
+      ) : null}
     </div>
   );
 }

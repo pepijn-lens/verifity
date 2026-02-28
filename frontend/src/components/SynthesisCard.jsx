@@ -1,91 +1,45 @@
-function downloadSynthesisPdfLike(synthesis) {
-  const printable = `
-Consensus:
-${synthesis?.consensus ?? ""}
-
-Key Insights:
-${(synthesis?.keyInsights ?? []).map((item) => `- ${item}`).join("\n")}
-
-Disagreements:
-${(synthesis?.disagreements ?? []).map((item) => `- ${item}`).join("\n")}
-
-Next Steps:
-${(synthesis?.nextSteps ?? []).map((item) => `- ${item}`).join("\n")}
-
-Open Questions:
-${(synthesis?.openQuestions ?? []).map((item) => `- ${item}`).join("\n")}
-`;
-
-  const popup = window.open("", "_blank");
-  if (!popup) return;
-  popup.document.write(`<pre style="font-family: Inter, sans-serif; white-space: pre-wrap;">${printable}</pre>`);
-  popup.document.close();
-  popup.focus();
-  popup.print();
-}
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export default function SynthesisCard({ synthesis }) {
   if (!synthesis) return null;
 
+  const text = typeof synthesis === "string"
+    ? synthesis
+    : synthesis.consensus ?? JSON.stringify(synthesis, null, 2);
+
   return (
     <section className="mx-6 mb-24 mt-4 rounded-2xl border border-zinc-700 bg-zinc-900 p-6">
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-xl font-semibold text-white">Synthesis</h3>
+        <h3 className="text-xl font-semibold text-white">Answer</h3>
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => navigator.clipboard.writeText(JSON.stringify(synthesis, null, 2))}
+            onClick={() => navigator.clipboard.writeText(text)}
             className="rounded border border-zinc-600 px-3 py-1 text-sm text-zinc-200 hover:bg-zinc-800"
           >
             Copy
           </button>
           <button
             type="button"
-            onClick={() => downloadSynthesisPdfLike(synthesis)}
+            onClick={() => {
+              const popup = window.open("", "_blank");
+              if (!popup) return;
+              popup.document.write(
+                `<html><head><style>body{font-family:Inter,system-ui,sans-serif;max-width:700px;margin:40px auto;line-height:1.6;color:#222}h1,h2,h3{margin-top:1.2em}ul,ol{padding-left:1.5em}code{background:#f0f0f0;padding:2px 4px;border-radius:3px;font-size:0.9em}</style></head><body>${document.querySelector(".synthesis-md")?.innerHTML ?? "<pre>" + text + "</pre>"}</body></html>`,
+              );
+              popup.document.close();
+              popup.focus();
+              popup.print();
+            }}
             className="rounded bg-indigo-500 px-3 py-1 text-sm text-white hover:bg-indigo-400"
           >
             Download as PDF
           </button>
         </div>
       </div>
-
-      <div className="space-y-4 text-sm text-zinc-200">
-        <div>
-          <div className="mb-1 text-zinc-400">Consensus</div>
-          <p>{synthesis.consensus}</p>
-        </div>
-        <div>
-          <div className="mb-1 text-zinc-400">Key Insights</div>
-          <ul className="list-disc space-y-1 pl-5">
-            {(synthesis.keyInsights ?? []).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <div className="mb-1 text-zinc-400">Disagreements</div>
-          <ul className="list-disc space-y-1 pl-5">
-            {(synthesis.disagreements ?? []).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <div className="mb-1 text-zinc-400">Next Steps</div>
-          <ul className="list-disc space-y-1 pl-5">
-            {(synthesis.nextSteps ?? []).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-        <div>
-          <div className="mb-1 text-zinc-400">Open Questions</div>
-          <ul className="list-disc space-y-1 pl-5">
-            {(synthesis.openQuestions ?? []).map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
+      <div className="synthesis-md markdown-content prose prose-invert max-w-none text-sm text-zinc-200">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
     </section>
   );
