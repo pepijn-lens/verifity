@@ -13,3 +13,35 @@ body {
 .font-mono {
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+.markdown-content {
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.markdown-content p {
+  margin: 0.25rem 0;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin: 0.25rem 0;
+  padding-left: 1rem;
+}
+
+.markdown-content code {
+  background: rgba(113, 113, 122, 0.25);
+  border-radius: 4px;
+  padding: 0.1rem 0.25rem;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.markdown-content pre {
+  overflow-x: auto;
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: #0f0f0f;
+  border: 1px solid #27272a;
+  margin: 0.35rem 0;
+}

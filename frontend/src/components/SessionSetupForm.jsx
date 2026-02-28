@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { MODEL_OPTIONS, useSessionStore } from "../store/sessionStore";
+import { extractAttachmentContext } from "../utils/attachments";
 import RoleTemplatesModal from "./RoleTemplatesModal";
 
 export default function SessionSetupForm({ onStart }) {
@@ -11,6 +12,7 @@ export default function SessionSetupForm({ onStart }) {
   const [sessionGoal, setSessionGoal] = useState("");
   const [maxAgents, setMaxAgents] = useState(4);
   const [preferredModels, setPreferredModels] = useState(MODEL_OPTIONS.slice(0, 4).map((m) => m.value));
+  const [files, setFiles] = useState([]);
 
   const selectedModelObjects = useMemo(
     () => MODEL_OPTIONS.filter((model) => preferredModels.includes(model.value)),
@@ -24,14 +26,17 @@ export default function SessionSetupForm({ onStart }) {
     });
   };
 
-  const handleStart = (event) => {
+  const handleStart = async (event) => {
     event.preventDefault();
     if (!sessionGoal.trim() || selectedModelObjects.length === 0) return;
 
+    const attachmentContext = await extractAttachmentContext(files);
+
     const payload = {
-      sessionGoal: sessionGoal.trim(),
+      sessionGoal: `${sessionGoal.trim()}${attachmentContext.contextText}`,
       maxAgents,
       preferredModels: selectedModelObjects,
+      attachmentNames: attachmentContext.attachmentNames,
     };
     setSetupConfig(payload);
     onStart(payload);
@@ -67,6 +72,20 @@ export default function SessionSetupForm({ onStart }) {
                 </option>
               ))}
             </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm font-medium text-zinc-200">Attachments (images, PDF, text)</span>
+            <input
+              type="file"
+              multiple
+              accept="image/*,.pdf,.txt,.md,.csv,.json"
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200"
+            />
+            {files.length > 0 ? (
+              <div className="mt-2 text-xs text-zinc-400">{files.map((file) => file.name).join(", ")}</div>
+            ) : null}
           </label>
 
           <div>

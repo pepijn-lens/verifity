@@ -15,9 +15,57 @@ function normalizeModelList(models = []) {
   return models.map((model) => model.value).join(", ");
 }
 
+function normalizeModelId(model) {
+  return String(model ?? "").trim().toLowerCase();
+}
+
+function resolveAllowedModel(candidateModel, allowedModels, fallbackModel) {
+  const normalizedCandidate = normalizeModelId(candidateModel);
+  const normalizedAllowed = new Map(
+    allowedModels.map((modelId) => [normalizeModelId(modelId), modelId]),
+  );
+
+  if (normalizedAllowed.has(normalizedCandidate)) {
+    return normalizedAllowed.get(normalizedCandidate);
+  }
+
+  // Common shorthand aliases produced by orchestration prompts.
+  const aliases = {
+    "gemini 3.1": "google/gemini-3.1-pro-preview",
+    gemini: "google/gemini-3.1-pro-preview",
+    claude: "anthropic/claude-3.5-sonnet",
+    gpt4o: "openai/gpt-5.2",
+    "gpt-4o": "openai/gpt-5.2",
+    gpt: "openai/gpt-5.2",
+    "gpt-5.2": "openai/gpt-5.2",
+    mixtral: "mistralai/mixtral-8x7b-instruct",
+  };
+
+  const aliasTarget = aliases[normalizedCandidate];
+  if (aliasTarget && normalizedAllowed.has(normalizeModelId(aliasTarget))) {
+    return normalizedAllowed.get(normalizeModelId(aliasTarget));
+  }
+
+  return fallbackModel;
+}
+
+function sanitizeAgents(rawAgents, preferredModels, maxAgents) {
+  const allowedModels = preferredModels?.map((model) => model.value) ?? [];
+  const fallbackModel = allowedModels[0] ?? "openai/gpt-5.2";
+
+  return (rawAgents ?? []).slice(0, maxAgents).map((agent, index) => ({
+    ...agent,
+    id: agent?.id ?? `agent_${index + 1}`,
+    name: agent?.name ?? `Agent ${index + 1}`,
+    role: agent?.role ?? "Contribute useful ideas and challenge weak assumptions.",
+    color: agent?.color ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length],
+    model: resolveAllowedModel(agent?.model, allowedModels, fallbackModel),
+  }));
+}
+
 function fallbackPlan({ preferredModels, maxAgents }) {
   const count = Math.max(2, Math.min(maxAgents ?? 4, 4));
-  const fallbackModel = preferredModels?.[0]?.value ?? "openai/gpt-4o-mini";
+  const fallbackModel = preferredModels?.[0]?.value ?? "openai/gpt-5.2";
   const agents = Array.from({ length: count }).map((_, index) => ({
     id: `agent_${index + 1}`,
     model: preferredModels?.[index]?.value ?? fallbackModel,
@@ -31,6 +79,15 @@ function fallbackPlan({ preferredModels, maxAgents }) {
     speakingOrder: agents.map((agent) => agent.id),
     roundInstructions: "Start with your strongest perspective and cite trade-offs.",
   };
+}
+
+function sanitizeSpeakingOrder(agents, candidateOrder) {
+  const validIds = new Set(agents.map((agent) => agent.id));
+  const fallback = agents.map((agent) => agent.id);
+
+  if (!Array.isArray(candidateOrder)) return fallback;
+  const filtered = candidateOrder.filter((id) => validIds.has(id));
+  return filtered.length > 0 ? filtered : fallback;
 }
 
 export async function initializeSessionPlan({ apiKey, sessionGoal, preferredModels, maxAgents }) {
@@ -70,11 +127,10 @@ Respond ONLY in this JSON format:
       return fallbackPlan({ preferredModels, maxAgents });
     }
 
+    const agents = sanitizeAgents(parsed.agents, preferredModels, maxAgents);
     return {
-      agents: parsed.agents.slice(0, maxAgents),
-      speakingOrder: Array.isArray(parsed.speakingOrder)
-        ? parsed.speakingOrder
-        : parsed.agents.map((agent) => agent.id),
+      agents,
+      speakingOrder: sanitizeSpeakingOrder(agents, parsed.speakingOrder),
       roundInstructions:
         parsed.roundInstructions ?? "Share your strongest contribution to the session goal.",
     };
@@ -128,7 +184,7 @@ Respond only in JSON:
 
     return {
       action: "continue",
-      speakingOrder: Array.isArray(parsed.speakingOrder) ? parsed.speakingOrder : speakingOrder,
+      speakingOrder: sanitizeSpeakingOrder(agents, parsed.speakingOrder ?? speakingOrder),
       roundInstructions: parsed.roundInstructions ?? "Push for sharper trade-offs and decision criteria.",
     };
   } catch {

@@ -1,3 +1,5 @@
+import { Handle, Position } from "reactflow";
+
 export default function MasterAgentNode({ data }) {
   const active = data?.active;
   return (
@@ -6,6 +8,7 @@ export default function MasterAgentNode({ data }) {
         active ? "animate-pulse border-indigo-400" : "border-zinc-700"
       }`}
     >
+      <Handle id="out" type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-zinc-300" />
       <div className="flex items-center gap-2 text-zinc-100">
         <span>*</span>
         <span className="font-semibold">Master Agent - Claude 3.5 Sonnet</span>

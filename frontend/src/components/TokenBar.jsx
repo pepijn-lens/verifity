@@ -3,8 +3,8 @@ import { formatNumber, formatUsd } from "../utils/pricing";
 export default function TokenBar({ totals }) {
   const modelEntries = Object.entries(totals?.modelBreakdown ?? {});
   return (
-    <div className="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-700 bg-zinc-900/95 px-6 py-3 backdrop-blur">
-      <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-200">
+    <div className="fixed bottom-2 left-1/2 z-20 w-[min(980px,calc(100%-1rem))] -translate-x-1/2 rounded-xl border border-zinc-700 bg-zinc-900/90 px-4 py-2 shadow-xl backdrop-blur">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-200">
         <span>Session tokens used: {formatNumber(totals?.totalTokens ?? 0)}</span>
         <span>|</span>
         <span>Estimated cost: {formatUsd(totals?.totalCostUsd ?? 0)}</span>

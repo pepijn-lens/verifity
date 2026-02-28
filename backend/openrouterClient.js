@@ -45,20 +45,52 @@ export async function streamChatCompletion({
   temperature = 0.7,
   onChunk,
 }) {
-  const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: defaultHeaders(apiKey),
-    body: JSON.stringify({
+  const isPerplexityModel = model.startsWith("perplexity/");
+  const requestStream = (payload) =>
+    fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: defaultHeaders(apiKey),
+      body: JSON.stringify(payload),
+    });
+
+  let response = await requestStream({
+    model,
+    messages,
+    temperature,
+    stream: true,
+    stream_options: { include_usage: true },
+  });
+
+  if ((!response.ok || !response.body) && isPerplexityModel) {
+    // Some Perplexity routes intermittently fail with stream_options.
+    response = await requestStream({
       model,
       messages,
       temperature,
       stream: true,
-      stream_options: { include_usage: true },
-    }),
-  });
+    });
+  }
 
   if (!response.ok || !response.body) {
     const text = await response.text();
+
+    if (isPerplexityModel) {
+      // Last-resort fallback: return a non-stream response as one chunk.
+      const fallback = await createChatCompletion({
+        apiKey,
+        model,
+        messages,
+        temperature,
+      });
+      if (fallback.content) {
+        onChunk?.(fallback.content, fallback.content);
+      }
+      return {
+        content: fallback.content,
+        usage: fallback.usage,
+      };
+    }
+
     throw new Error(`OpenRouter stream error (${response.status}): ${text}`);
   }
 

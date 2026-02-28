@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
-import { runAgentTurn } from "./agentRunner.js";
+import { runAgentFollowup, runAgentTurn } from "./agentRunner.js";
+import { createChatCompletion } from "./openrouterClient.js";
 import {
   evaluateNextStep,
   initializeSessionPlan,
@@ -12,6 +13,7 @@ import { addUsage, createTokenTracker, ensurePricingLoaded } from "./tokenTracke
 const app = express();
 const PORT = process.env.PORT ?? 8787;
 const MAX_ROUNDS = 3;
+const PERPLEXITY_FALLBACK_MODEL = "openai/gpt-4o-mini";
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -19,6 +21,31 @@ app.use(express.json({ limit: "1mb" }));
 function sendSseEvent(res, event, data) {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function toFriendlyErrorMessage(rawMessage = "") {
+  if (/401|Missing Authentication header|Unauthorized/i.test(rawMessage)) {
+    return "OpenRouter rejected the API key. Please add a valid key and retry.";
+  }
+  if (/429|rate limit/i.test(rawMessage)) {
+    return "OpenRouter rate limit reached. Please wait a moment and retry this agent.";
+  }
+  if (/network|fetch failed|ECONNRESET|ENOTFOUND/i.test(rawMessage)) {
+    return "Network issue while contacting OpenRouter. Please retry.";
+  }
+  return rawMessage || "Agent request failed unexpectedly.";
+}
+
+function extractStatusCodeFromError(rawMessage = "") {
+  const match = rawMessage.match(/\((\d{3})\)/);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+function shouldRetryPerplexityWithFallback(agentModel, rawMessage = "") {
+  if (!String(agentModel).startsWith("perplexity/")) return false;
+  const statusCode = extractStatusCodeFromError(rawMessage);
+  return statusCode !== null && statusCode >= 500;
 }
 
 function toHistoryText(history) {
@@ -51,7 +78,7 @@ app.post("/api/session", async (req, res) => {
   const conversationHistory = [];
   let clientDisconnected = false;
 
-  req.on("close", () => {
+  res.on("close", () => {
     clientDisconnected = true;
   });
 
@@ -93,41 +120,113 @@ app.post("/api/session", async (req, res) => {
 
         sendSseEvent(res, "agent_status", { agentId: agent.id, status: "speaking" });
         let sentFirstChunk = false;
+        try {
+          const result = await runAgentTurn({
+            apiKey,
+            agent,
+            sessionGoal,
+            conversationHistory: toHistoryText(conversationHistory),
+            roundInstructions,
+            onTokenChunk: (delta, fullText) => {
+              if (!sentFirstChunk) {
+                sendSseEvent(res, "agent_message_started", { agentId: agent.id });
+                sentFirstChunk = true;
+              }
+              sendSseEvent(res, "agent_message_chunk", {
+                agentId: agent.id,
+                delta,
+                content: fullText,
+              });
+            },
+          });
 
-        const result = await runAgentTurn({
-          apiKey,
-          agent,
-          sessionGoal,
-          conversationHistory: toHistoryText(conversationHistory),
-          roundInstructions,
-          onTokenChunk: (delta, fullText) => {
-            if (!sentFirstChunk) {
-              sendSseEvent(res, "agent_message_started", { agentId: agent.id });
-              sentFirstChunk = true;
-            }
-            sendSseEvent(res, "agent_message_chunk", {
+          addUsage(tokenTracker, agent.model, result.usage);
+          conversationHistory.push({
+            roundNumber,
+            agentId: agent.id,
+            agentName: agent.name,
+            content: result.content,
+          });
+
+          sendSseEvent(res, "agent_message_completed", {
+            agentId: agent.id,
+            content: result.content,
+            usage: result.usage,
+            totals: tokenTracker,
+          });
+          sendSseEvent(res, "agent_status", { agentId: agent.id, status: "idle" });
+        } catch (error) {
+          const rawMessage = error.message || "";
+          if (shouldRetryPerplexityWithFallback(agent.model, rawMessage)) {
+            sendSseEvent(res, "agent_model_fallback", {
               agentId: agent.id,
-              delta,
-              content: fullText,
+              fromModel: agent.model,
+              toModel: PERPLEXITY_FALLBACK_MODEL,
+              reason: "Perplexity returned a 5xx error; retrying once with fallback model.",
             });
-          },
-        });
 
-        addUsage(tokenTracker, agent.model, result.usage);
-        conversationHistory.push({
-          roundNumber,
-          agentId: agent.id,
-          agentName: agent.name,
-          content: result.content,
-        });
+            sentFirstChunk = false;
+            const fallbackAgent = { ...agent, model: PERPLEXITY_FALLBACK_MODEL };
+            try {
+              const fallbackResult = await runAgentTurn({
+                apiKey,
+                agent: fallbackAgent,
+                sessionGoal,
+                conversationHistory: toHistoryText(conversationHistory),
+                roundInstructions,
+                onTokenChunk: (delta, fullText) => {
+                  if (!sentFirstChunk) {
+                    sendSseEvent(res, "agent_message_started", { agentId: agent.id });
+                    sentFirstChunk = true;
+                  }
+                  sendSseEvent(res, "agent_message_chunk", {
+                    agentId: agent.id,
+                    delta,
+                    content: fullText,
+                  });
+                },
+              });
 
-        sendSseEvent(res, "agent_message_completed", {
-          agentId: agent.id,
-          content: result.content,
-          usage: result.usage,
-          totals: tokenTracker,
-        });
-        sendSseEvent(res, "agent_status", { agentId: agent.id, status: "idle" });
+              addUsage(tokenTracker, fallbackAgent.model, fallbackResult.usage);
+              conversationHistory.push({
+                roundNumber,
+                agentId: agent.id,
+                agentName: agent.name,
+                content: fallbackResult.content,
+              });
+
+              sendSseEvent(res, "agent_message_completed", {
+                agentId: agent.id,
+                content: fallbackResult.content,
+                usage: fallbackResult.usage,
+                totals: tokenTracker,
+                effectiveModel: PERPLEXITY_FALLBACK_MODEL,
+              });
+              sendSseEvent(res, "agent_status", { agentId: agent.id, status: "idle" });
+              continue;
+            } catch (fallbackError) {
+              const fallbackMessage = toFriendlyErrorMessage(fallbackError.message || "");
+              sendSseEvent(res, "agent_error", {
+                agentId: agent.id,
+                roundNumber,
+                message: fallbackMessage,
+                retryable: true,
+              });
+              sendSseEvent(res, "agent_status", { agentId: agent.id, status: "error" });
+              throw new Error(fallbackMessage);
+            }
+          }
+
+          const message = toFriendlyErrorMessage(rawMessage);
+          sendSseEvent(res, "agent_error", {
+            agentId: agent.id,
+            roundNumber,
+            message,
+            retryable: true,
+          });
+          sendSseEvent(res, "agent_status", { agentId: agent.id, status: "error" });
+          throw new Error(message);
+        }
       }
 
       const nextStep = await evaluateNextStep({
@@ -173,6 +272,100 @@ app.post("/api/session", async (req, res) => {
       message: error.message || "Session failed unexpectedly.",
     });
     res.end();
+  }
+});
+
+function normalizeHistory(history) {
+  if (!history) return "No previous conversation provided.";
+  if (typeof history === "string") return history;
+  if (!Array.isArray(history)) return "No previous conversation provided.";
+
+  return history
+    .map((entry) => {
+      const speaker = entry?.speaker ?? entry?.agentName ?? entry?.role ?? "unknown";
+      const content = entry?.content ?? "";
+      return `[${speaker}] ${content}`;
+    })
+    .join("\n");
+}
+
+app.post("/api/followup", async (req, res) => {
+  const apiKey = req.header("X-OpenRouter-Key");
+  if (!apiKey) {
+    return res.status(400).json({ error: "Missing X-OpenRouter-Key header." });
+  }
+
+  const {
+    mode,
+    prompt,
+    sessionGoal,
+    conversationHistory,
+    agent,
+    availableAgents = [],
+  } = req.body ?? {};
+
+  if (!prompt || typeof prompt !== "string") {
+    return res.status(400).json({ error: "Missing prompt." });
+  }
+
+  const historyText = normalizeHistory(conversationHistory);
+
+  try {
+    if (mode === "agent") {
+      if (!agent?.model || !agent?.name || !agent?.role) {
+        return res.status(400).json({ error: "Missing agent metadata for agent follow-up." });
+      }
+
+      const result = await runAgentFollowup({
+        apiKey,
+        agent,
+        sessionGoal: sessionGoal || "No session goal provided.",
+        conversationHistory: historyText,
+        userPrompt: prompt,
+      });
+
+      return res.json({
+        mode: "agent",
+        agentId: agent.id,
+        content: result.content,
+        usage: result.usage,
+      });
+    }
+
+    if (mode === "master") {
+      const masterPrompt = `You are the master orchestrator of a multi-agent AI collaboration session.
+Session goal: ${sessionGoal || "No session goal provided."}
+Team agents:
+${JSON.stringify(availableAgents)}
+
+Conversation so far:
+${historyText}
+
+User request:
+${prompt}
+
+Respond as the orchestrator. You can either:
+1) provide direct orchestration guidance, or
+2) provide a short actionable plan for another mini-round.
+Keep your response under 250 words.`;
+
+      const result = await createChatCompletion({
+        apiKey,
+        model: MASTER_MODEL,
+        messages: [{ role: "system", content: masterPrompt }],
+        temperature: 0.4,
+      });
+
+      return res.json({
+        mode: "master",
+        content: result.content,
+        usage: result.usage,
+      });
+    }
+
+    return res.status(400).json({ error: "Invalid follow-up mode. Use 'agent' or 'master'." });
+  } catch (error) {
+    return res.status(500).json({ error: toFriendlyErrorMessage(error.message || "") });
   }
 });
 
