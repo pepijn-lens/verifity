@@ -85,10 +85,15 @@ async function createChatCompletion({apiKey, model, messages, temperature = 0.7,
     throw new Error(`OpenRouter error (${res.status}): ${text}`);
   }
   const data = await res.json();
-  return {
-    content: data?.choices?.[0]?.message?.content ?? "",
-    usage: data?.usage ?? {prompt_tokens: 0, completion_tokens: 0, total_tokens: 0},
-  };
+  const content = data?.choices?.[0]?.message?.content ?? "";
+  let usage = data?.usage ?? {prompt_tokens: 0, completion_tokens: 0, total_tokens: 0};
+  if ((!usage.total_tokens || usage.total_tokens === 0) && content.length > 0) {
+    const inputText = messages.map((m) => m.content ?? "").join(" ");
+    const estPrompt = Math.ceil(inputText.length / 4);
+    const estCompletion = Math.ceil(content.length / 4);
+    usage = {prompt_tokens: estPrompt, completion_tokens: estCompletion, total_tokens: estPrompt + estCompletion};
+  }
+  return { content, usage };
 }
 
 async function streamChatCompletion({apiKey, model, messages, temperature = 0.7, onChunk}) {
@@ -143,6 +148,12 @@ async function streamChatCompletion({apiKey, model, messages, temperature = 0.7,
         } catch { /* ignore */ }
       }
     }
+  }
+  if (finalUsage.total_tokens === 0 && fullText.length > 0) {
+    const inputText = messages.map((m) => m.content ?? "").join(" ");
+    const estPrompt = Math.ceil(inputText.length / 4);
+    const estCompletion = Math.ceil(fullText.length / 4);
+    finalUsage = {prompt_tokens: estPrompt, completion_tokens: estCompletion, total_tokens: estPrompt + estCompletion};
   }
   return {content: fullText, usage: finalUsage};
 }
@@ -606,6 +617,195 @@ app.post("/api/followup", async (req, res) => {
     return res.status(400).json({error: "Invalid mode."});
   } catch (error) {
     return res.status(500).json({error: friendlyError(error.message)});
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Compare endpoints
+// ---------------------------------------------------------------------------
+function compareRef(uid, compareId) {
+  return db.collection("users").doc(uid).collection("compares").doc(compareId);
+}
+
+function generateCompareId() {
+  return `cmp_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+}
+
+app.post("/api/compare/run", async (req, res) => {
+  const apiKey = req.header("X-OpenRouter-Key");
+  const {prompt, models = []} = req.body ?? {};
+  if (!apiKey) return res.status(400).json({error: "Missing X-OpenRouter-Key header."});
+  if (!prompt) return res.status(400).json({error: "Missing prompt."});
+  if (models.length < 2) return res.status(400).json({error: "Select at least 2 models."});
+
+  const decoded = await tryVerifyAuth(req);
+  const uid = decoded?.uid ?? null;
+  const compareId = generateCompareId();
+
+  try {
+    const results = await Promise.all(
+      models.map(async (model) => {
+        try {
+          const result = await createChatCompletion({
+            apiKey, model,
+            messages: [{role: "user", content: prompt}],
+            temperature: 0.7,
+          });
+          return {model, content: result.content, usage: result.usage, error: null};
+        } catch (err) {
+          return {model, content: null, usage: null, error: friendlyError(err.message)};
+        }
+      }),
+    );
+
+    if (uid) {
+      compareRef(uid, compareId).set({
+        type: "compare",
+        prompt, models, responses: results,
+        points: null, selectedPoints: null, finalAnswer: null,
+        status: "responses_ready",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(), completedAt: null,
+      }).catch(() => {});
+    }
+
+    return res.json({compareId, responses: results});
+  } catch (error) {
+    return res.status(500).json({error: friendlyError(error.message)});
+  }
+});
+
+app.post("/api/compare/analyze", async (req, res) => {
+  const apiKey = req.header("X-OpenRouter-Key");
+  const {compareId, prompt, responses = []} = req.body ?? {};
+  if (!apiKey) return res.status(400).json({error: "Missing X-OpenRouter-Key header."});
+
+  const decoded = await tryVerifyAuth(req);
+  const uid = decoded?.uid ?? null;
+
+  const responsesText = responses
+    .filter((r) => r.content)
+    .map((r) => `=== ${r.model} ===\n${r.content}`)
+    .join("\n\n");
+
+  const sysPrompt = `You are an expert analyst comparing responses from multiple LLMs to the same prompt.
+
+User's original prompt: "${prompt}"
+
+Here are the responses from each model:
+${responsesText}
+
+Analyze these responses and extract:
+1. Points of AGREEMENT - things most or all models say (these are likely reliable)
+2. Points of DISAGREEMENT - where models differ in substance, recommendation, or emphasis
+
+For each point, note which models support it.
+
+Respond ONLY in JSON:
+{"points":[{"id":"p1","type":"agreement","text":"<concise description of the point>","models":["model/id1","model/id2"]},{"id":"p2","type":"disagreement","text":"<what differs and how>","models":["model/id1"]}]}
+
+Be thorough. Extract 4-10 meaningful points. Each point should be a clear, self-contained statement.`;
+
+  try {
+    const result = await createChatCompletion({
+      apiKey, model: MASTER_MODEL,
+      messages: [{role: "system", content: sysPrompt}],
+      temperature: 0.3,
+      responseFormat: {type: "json_object"},
+    });
+
+    const parsed = safeJsonParse(result.content);
+    const points = (parsed?.points ?? []).map((p, i) => ({
+      id: p.id || `p${i + 1}`,
+      type: p.type === "disagreement" ? "disagreement" : "agreement",
+      text: p.text || "",
+      models: Array.isArray(p.models) ? p.models : [],
+    }));
+
+    if (uid && compareId) {
+      compareRef(uid, compareId).update({points, status: "analyzed"}).catch(() => {});
+    }
+
+    return res.json({points});
+  } catch (error) {
+    return res.status(500).json({error: friendlyError(error.message)});
+  }
+});
+
+app.post("/api/compare/finalize", async (req, res) => {
+  const apiKey = req.header("X-OpenRouter-Key");
+  const {compareId, prompt, selectedPoints = [], responses = []} = req.body ?? {};
+  if (!apiKey) return res.status(400).json({error: "Missing X-OpenRouter-Key header."});
+
+  const decoded = await tryVerifyAuth(req);
+  const uid = decoded?.uid ?? null;
+
+  const pointsText = selectedPoints.map((p, i) => `${i + 1}. ${p.text}`).join("\n");
+  const responsesText = responses
+    .filter((r) => r.content)
+    .map((r) => `=== ${r.model} ===\n${r.content}`)
+    .join("\n\n");
+
+  const sysPrompt = `You are producing the best possible answer to the user's question by combining insights from multiple AI models.
+
+User's original question: "${prompt}"
+
+The user reviewed the model responses and selected these points to include:
+${pointsText}
+
+Original model responses for reference:
+${responsesText}
+
+Write a comprehensive, well-structured answer in Markdown that incorporates ALL the selected points. Write as a single authoritative expert. Do NOT mention that multiple models were consulted. Do NOT reference "points" or "selections." Just give the best possible answer naturally.
+
+Use headers, bullet points, and paragraphs as appropriate. Be thorough but not padded.`;
+
+  try {
+    const result = await createChatCompletion({
+      apiKey, model: MASTER_MODEL,
+      messages: [{role: "system", content: sysPrompt}],
+      temperature: 0.5,
+    });
+
+    if (uid && compareId) {
+      compareRef(uid, compareId).update({
+        selectedPoints: selectedPoints.map((p) => p.id),
+        finalAnswer: result.content,
+        status: "completed",
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }).catch(() => {});
+    }
+
+    return res.json({finalAnswer: result.content});
+  } catch (error) {
+    return res.status(500).json({error: friendlyError(error.message)});
+  }
+});
+
+// Compare history
+app.get("/api/user/compares", async (req, res) => {
+  try {
+    const decoded = await verifyAuth(req);
+    const snap = await db.collection("users").doc(decoded.uid)
+        .collection("compares").orderBy("createdAt", "desc").limit(50).get();
+    const compares = snap.docs.map((doc) => {
+      const d = doc.data();
+      return {id: doc.id, prompt: d.prompt, models: d.models, status: d.status, createdAt: d.createdAt, completedAt: d.completedAt};
+    });
+    return res.json({compares});
+  } catch (err) {
+    return res.status(401).json({error: err.message || "Unauthorized"});
+  }
+});
+
+app.get("/api/user/compares/:compareId", async (req, res) => {
+  try {
+    const decoded = await verifyAuth(req);
+    const cid = req.params.compareId;
+    const snap = await compareRef(decoded.uid, cid).get();
+    if (!snap.exists) return res.status(404).json({error: "Compare not found"});
+    return res.json({compare: {id: cid, ...snap.data()}});
+  } catch (err) {
+    return res.status(401).json({error: err.message || "Unauthorized"});
   }
 });
 

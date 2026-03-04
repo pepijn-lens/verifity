@@ -15,6 +15,11 @@ service cloud.firestore {
           allow write: if false;
         }
       }
+
+      match /compares/{compareId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
+        allow write: if false;
+      }
     }
     match /{document=**} {
       allow read, write: if false;

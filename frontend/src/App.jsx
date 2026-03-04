@@ -3,6 +3,8 @@ import { onAuthStateChanged, signOut } from "firebase/auth";
 import AgentDrawer from "./components/AgentDrawer";
 import AuthGate from "./components/AuthGate";
 import Canvas from "./components/Canvas";
+import ComparePage from "./components/ComparePage";
+import CompareSetupForm from "./components/CompareSetupForm";
 import EventLogPanel from "./components/EventLogPanel";
 import OnboardingModal from "./components/OnboardingModal";
 import SessionHistory from "./components/SessionHistory";
@@ -373,16 +375,76 @@ async function runFollowupRequest({ mode, prompt, agent }) {
   return response.json();
 }
 
+async function runCompare({ prompt, models }) {
+  const state = useSessionStore.getState();
+  state.startCompare({ prompt, models });
+
+  let token = "";
+  try { token = await getIdToken(); } catch { /* fallback */ }
+
+  const headers = {
+    "Content-Type": "application/json",
+    "X-OpenRouter-Key": state.apiKey,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/compare/run`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt, models }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || "Compare run failed.");
+    }
+    const data = await res.json();
+    useSessionStore.getState().setCompareResponses(data.responses, data.compareId);
+  } catch (err) {
+    useSessionStore.getState().setCompareError(err.message);
+  }
+}
+
 function HomePage() {
+  const [mode, setMode] = useState("collaborate");
+
   return (
     <>
-      <SessionSetupForm
-        onStart={(config) => {
-          runSession(config).catch((err) => {
-            useSessionStore.getState().setSessionError(err.message);
-          });
-        }}
-      />
+      <div className="mx-auto mt-10 mb-2 flex max-w-3xl items-center justify-center gap-3">
+        <button
+          type="button"
+          onClick={() => setMode("collaborate")}
+          className={`rounded-lg border px-5 py-2.5 text-sm font-medium transition ${
+            mode === "collaborate"
+              ? "border-indigo-400 bg-indigo-500/20 text-indigo-100"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500"
+          }`}
+        >
+          Collaborate
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("compare")}
+          className={`rounded-lg border px-5 py-2.5 text-sm font-medium transition ${
+            mode === "compare"
+              ? "border-emerald-400 bg-emerald-500/20 text-emerald-100"
+              : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500"
+          }`}
+        >
+          Compare
+        </button>
+      </div>
+      {mode === "collaborate" ? (
+        <SessionSetupForm
+          onStart={(config) => {
+            runSession(config).catch((err) => {
+              useSessionStore.getState().setSessionError(err.message);
+            });
+          }}
+        />
+      ) : (
+        <CompareSetupForm onStart={runCompare} />
+      )}
       <SessionHistory />
     </>
   );
@@ -575,13 +637,18 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  const comparePrompt = useSessionStore((s) => s.comparePrompt);
+
   const headerSubtitle = useMemo(() => {
     if (page === "session") {
       const roundText = roundNumber ? `Round ${roundNumber}` : "Waiting";
       return `${roundText} | ${masterStatus}`;
     }
+    if (page === "compare" && comparePrompt) {
+      return `Compare | ${comparePrompt.slice(0, 60)}${comparePrompt.length > 60 ? "..." : ""}`;
+    }
     return null;
-  }, [page, roundNumber, masterStatus]);
+  }, [page, roundNumber, masterStatus, comparePrompt]);
 
   const isAuthenticated = !authLoading && authUser && emailVerified;
 
@@ -611,13 +678,13 @@ export default function App() {
           </div>
           {isAuthenticated ? (
             <div className="flex items-center gap-2">
-              {page === "session" && (
+              {(page === "session" || page === "compare") && (
                 <button
                   type="button"
                   onClick={() => { abortSession(); goHome(); }}
                   className="rounded border border-zinc-600 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
                 >
-                  New session
+                  {page === "session" ? "New session" : "Back home"}
                 </button>
               )}
               <button
@@ -652,6 +719,8 @@ export default function App() {
         <HomePage />
       ) : isAuthenticated && !onboardingOpen && page === "session" ? (
         <SessionPage />
+      ) : isAuthenticated && !onboardingOpen && page === "compare" ? (
+        <ComparePage />
       ) : null}
 
       {page === "session" && <TokenBar totals={tokenTotals} />}

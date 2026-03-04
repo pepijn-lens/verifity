@@ -339,6 +339,75 @@ export const useSessionStore = create((set, get) => ({
       masterStatus: "Synthesis Ready",
     }),
 
+  // -------------------------------------------------------------------------
+  // Compare feature state
+  // -------------------------------------------------------------------------
+  comparePrompt: "",
+  compareModels: [],
+  compareResponses: [],
+  comparePoints: [],
+  compareSelections: {},
+  compareFinalAnswer: null,
+  compareId: null,
+  compareLoading: "",
+  compareError: "",
+
+  startCompare: ({ prompt, models }) =>
+    set({
+      page: "compare",
+      comparePrompt: prompt,
+      compareModels: models,
+      compareResponses: [],
+      comparePoints: [],
+      compareSelections: {},
+      compareFinalAnswer: null,
+      compareId: null,
+      compareLoading: "running",
+      compareError: "",
+    }),
+
+  setCompareResponses: (responses, compareId) =>
+    set({ compareResponses: responses, compareId, compareLoading: "" }),
+
+  setComparePoints: (points) => {
+    const selections = {};
+    for (const p of points) {
+      selections[p.id] = p.type === "agreement";
+    }
+    set({ comparePoints: points, compareSelections: selections, compareLoading: "" });
+  },
+
+  toggleComparePoint: (pointId) =>
+    set({
+      compareSelections: {
+        ...get().compareSelections,
+        [pointId]: !get().compareSelections[pointId],
+      },
+    }),
+
+  setCompareFinalAnswer: (answer) =>
+    set({ compareFinalAnswer: answer, compareLoading: "" }),
+
+  setCompareLoading: (status) => set({ compareLoading: status }),
+  setCompareError: (msg) => set({ compareError: msg, compareLoading: "" }),
+
+  loadPastCompare: (compare) =>
+    set({
+      page: "compare",
+      comparePrompt: compare.prompt ?? "",
+      compareModels: compare.models ?? [],
+      compareResponses: compare.responses ?? [],
+      comparePoints: compare.points ?? [],
+      compareSelections: (compare.points ?? []).reduce((acc, p) => {
+        acc[p.id] = (compare.selectedPoints ?? []).includes(p.id) || p.type === "agreement";
+        return acc;
+      }, {}),
+      compareFinalAnswer: compare.finalAnswer ?? null,
+      compareId: compare.id ?? null,
+      compareLoading: "",
+      compareError: "",
+    }),
+
   navigate: (page) => set({ page }),
 
   goHome: () =>
@@ -352,6 +421,15 @@ export const useSessionStore = create((set, get) => ({
       eventLog: [],
       currentSessionId: null,
       viewingPastSession: false,
+      comparePrompt: "",
+      compareModels: [],
+      compareResponses: [],
+      comparePoints: [],
+      compareSelections: {},
+      compareFinalAnswer: null,
+      compareId: null,
+      compareLoading: "",
+      compareError: "",
       agents: mockAgents.map((agent) => ({
         ...agent,
         status: "idle",
@@ -379,11 +457,13 @@ export const useSessionStore = create((set, get) => ({
     set({
       page: "session",
       setupComplete: true,
-      viewingPastSession: true,
+      viewingPastSession: false,
       isRunning: false,
       error: "",
       synthesis: session.synthesis ?? null,
       sessionGoal: session.sessionGoal ?? "",
+      maxAgents: session.maxAgents ?? agents.length,
+      preferredModels: session.preferredModels ?? [],
       roundNumber: session.rounds ?? 0,
       masterStatus: session.status === "completed" ? "Synthesis Ready" : session.status ?? "Ready",
       currentSessionId: session.id ?? null,
